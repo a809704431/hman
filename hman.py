@@ -116,6 +116,8 @@ if __name__ == '__main__':
     for rs in regionservers:
         hms.append(HBaseMetrics(rs, port))
     mon = tabmon.TabularMonitor()
+    for key in HBaseMetrics.METRICS_KEYS:
+        mon.add_col(key)
 
     # main loop
     try:
