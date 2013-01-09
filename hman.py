@@ -54,9 +54,9 @@ class HBaseMetrics(object):
         if key not in self.METRICS_KEYS:
             raise KeyError()
         if self.METRICS_TYPES[key] == self.GAUGE_METRICS:
-            return self._get_gauge(key)
+            return str(self._get_gauge(key))
         elif self.METRICS_TYPES[key] == self.DELTA_METRICS:
-            return self._get_delta(key)
+            return str(self._get_delta(key))
 
     def _get_delta(self, key):
         if self.is_avaible():
