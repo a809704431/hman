@@ -122,7 +122,7 @@ if __name__ == '__main__':
         while True:
             for hm in hms:
                 hm.poll()
-            metrics = [m for m in hms if hm.is_avaible()]
+            metrics = [m for m in hms if m.is_avaible()]
             mon.update(metrics)
             time.sleep(10)
     finally:
