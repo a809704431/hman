@@ -19,14 +19,23 @@ class HBaseMetrics(object):
     METRICS_KEYS = []
     METRICS_KEYS.append('HOSTNAME')
     METRICS_KEYS.append('MULTI_OPS')
+    METRICS_KEYS.append('MEMSTORE')
+    METRICS_KEYS.append('REQS')
+    METRICS_KEYS.append('FLU_SIZE')
 
     METRICS_TYPES = {}
     METRICS_TYPES['HOSTNAME'] = GAUGE_METRICS
     METRICS_TYPES['MULTI_OPS'] = DELTA_METRICS
+    METRICS_TYPES['MEMSTORE'] = GAUGE_METRICS
+    METRICS_TYPES['REQS'] = GAUGE_METRICS
+    METRICS_TYPES['FLU_SIZE'] = GAUGE_METRICS
 
     METRICS_FUNCS = {}
     METRICS_FUNCS['HOSTNAME'] = lambda x: x['rpc']['metrics'][0][0]['hostName']
     METRICS_FUNCS['MULTI_OPS'] = lambda x: x['rpc']['metrics'][0][1]['multi_num_ops']
+    METRICS_FUNCS['MEMSTORE'] = lambda x: x['hbase']['regionserver'][0][1]['memstoreSizeMB']
+    METRICS_FUNCS['REQS'] = lambda x: x['hbase']['regionserver'][0][1]['requests']
+    METRICS_FUNCS['FLU_SIZE'] = lambda x: x['hbase']['regionserver'][0]['flushSize_avg_time']
 
     def __init__(self, hostname, port):
         self.hostname = hostname
