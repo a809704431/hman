@@ -35,7 +35,7 @@ class HBaseMetrics(object):
     METRICS_FUNCS['MULTI_OPS'] = lambda x: x['rpc']['metrics'][0][1]['multi_num_ops']
     METRICS_FUNCS['MEMSTORE'] = lambda x: x['hbase']['regionserver'][0][1]['memstoreSizeMB']
     METRICS_FUNCS['REQS'] = lambda x: x['hbase']['regionserver'][0][1]['requests']
-    METRICS_FUNCS['FLU_SIZE'] = lambda x: x['hbase']['regionserver'][0]['flushSize_avg_time']
+    METRICS_FUNCS['FLU_SIZE'] = lambda x: x['hbase']['regionserver'][0][1]['flushSize_avg_time']
 
     def __init__(self, hostname, port):
         self.hostname = hostname
