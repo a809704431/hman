@@ -13,9 +13,11 @@ import tabmon
 class HBaseMetrics(object):
     '''Represent a hbase metrics.'''
 
+    # metrics type
     DELTA_METRICS = 0
     GAUGE_METRICS = 1
 
+    # list of keys will be displayed on monitor
     METRICS_KEYS = []
     METRICS_KEYS.append('HOSTNAME')
     METRICS_KEYS.append('MULTI_OPS')
@@ -24,6 +26,8 @@ class HBaseMetrics(object):
     METRICS_KEYS.append('R_REQS')
     METRICS_KEYS.append('FLU_SIZE')
     METRICS_KEYS.append('REGIONS')
+    METRICS_KEYS.append('STOREFILES')
+    METRICS_KEYS.append('CMPCT_Q_SZ')
 
     METRICS_TYPES = {}
     METRICS_TYPES['HOSTNAME'] = GAUGE_METRICS
@@ -33,6 +37,8 @@ class HBaseMetrics(object):
     METRICS_TYPES['R_REQS'] = DELTA_METRICS
     METRICS_TYPES['FLU_SIZE'] = GAUGE_METRICS
     METRICS_TYPES['REGIONS'] = GAUGE_METRICS
+    METRICS_TYPES['STOREFILES'] = GAUGE_METRICS
+    METRICS_TYPES['CMPCT_Q_SZ'] = GAUGE_METRICS
 
     METRICS_FUNCS = {}
     METRICS_FUNCS['HOSTNAME'] = lambda x: x['rpc']['metrics'][0][0]['hostName']
@@ -42,11 +48,14 @@ class HBaseMetrics(object):
     METRICS_FUNCS['R_REQS'] = lambda x: x['hbase']['regionserver'][0][1]['readRequestsCount']
     METRICS_FUNCS['FLU_SIZE'] = lambda x: x['hbase']['regionserver'][0][1]['flushSize_avg_time']
     METRICS_FUNCS['REGIONS'] = lambda x: x['hbase']['regionserver'][0][1]['regions']
+    METRICS_FUNCS['STOREFILES'] = lambda x: x['hbase']['regionserver'][0][1]['storefiles']
+    METRICS_FUNCS['CMPCT_Q_SZ'] = lambda x: x['hbase']['regionserver'][0][1]['compactionQueueSize']
 
     def __init__(self, hostname, port):
         self.hostname = hostname
         self.port = port
         self.snapshots = []
+        self.is_dead = False
 
     def poll(self):
         '''Poll metrics from region server.'''
@@ -60,12 +69,20 @@ class HBaseMetrics(object):
         '''Get metrics from regionserver rs.
 
         Return metrics as JSON.'''
-        metrics_url = 'http://%s:%d/metrics?format=json' % (self.hostname, self.port)
-        r = requests.get(metrics_url)
-        r.raise_for_status()
-        return r.json()
+        try:
+            metrics_url = 'http://%s:%d/metrics?format=json' % (self.hostname, self.port)
+            r = requests.get(metrics_url)
+            r.raise_for_status()
+            # can be connected to, is alive or back into live again
+            self.is_dead = False
+            return r.json()
+        except requests.exceptions.ConnectionError:
+            self.is_dead = True
+            return None
 
     def __getitem__(self, key):
+        if self.is_dead:
+            return 'DEAD'
         if key not in self.METRICS_KEYS:
             raise KeyError()
         if self.METRICS_TYPES[key] == self.GAUGE_METRICS:
@@ -86,7 +103,11 @@ class HBaseMetrics(object):
             return func(self.snapshots[1])
 
     def is_avaible(self):
-        return len(self.snapshots) == 2
+        if len(self.snapshots) == 2 and \
+           self.snapshots[0] is not None and \
+           self.snapshots[1] is not None:
+            return True
+        return False
 
 
 if __name__ == '__main__':
