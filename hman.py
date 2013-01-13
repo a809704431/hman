@@ -1,167 +1,96 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import argparse
 import os
 import os.path
 import sys
 import time
 import requests
-import tabmon
+from tabmon import TabularMonitor
+from metrics import RegionServerMetrics
+import conf
 
 
-class HBaseMetrics(object):
-    '''Represent a hbase metrics.'''
-
-    # metrics type
-    DELTA_METRICS = 0
-    GAUGE_METRICS = 1
-
-    # list of keys will be displayed on monitor
-    METRICS_KEYS = []
-    METRICS_KEYS.append('HOSTNAME')
-    METRICS_KEYS.append('MULTI_OPS')
-    METRICS_KEYS.append('MEMSTORE')
-    METRICS_KEYS.append('W_REQS')
-    METRICS_KEYS.append('R_REQS')
-    METRICS_KEYS.append('FLU_SIZE')
-    METRICS_KEYS.append('REGIONS')
-    METRICS_KEYS.append('STOREFILES')
-    METRICS_KEYS.append('CMPCT_Q_SZ')
-
-    METRICS_TYPES = {}
-    METRICS_TYPES['HOSTNAME'] = GAUGE_METRICS
-    METRICS_TYPES['MULTI_OPS'] = DELTA_METRICS
-    METRICS_TYPES['MEMSTORE'] = GAUGE_METRICS
-    METRICS_TYPES['W_REQS'] = DELTA_METRICS
-    METRICS_TYPES['R_REQS'] = DELTA_METRICS
-    METRICS_TYPES['FLU_SIZE'] = GAUGE_METRICS
-    METRICS_TYPES['REGIONS'] = GAUGE_METRICS
-    METRICS_TYPES['STOREFILES'] = GAUGE_METRICS
-    METRICS_TYPES['CMPCT_Q_SZ'] = GAUGE_METRICS
-
-    METRICS_FUNCS = {}
-    METRICS_FUNCS['HOSTNAME'] = lambda x: x['rpc']['metrics'][0][0]['hostName']
-    METRICS_FUNCS['MULTI_OPS'] = lambda x: x['rpc']['metrics'][0][1]['multi_num_ops']
-    METRICS_FUNCS['MEMSTORE'] = lambda x: x['hbase']['regionserver'][0][1]['memstoreSizeMB']
-    METRICS_FUNCS['W_REQS'] = lambda x: x['hbase']['regionserver'][0][1]['writeRequestsCount']
-    METRICS_FUNCS['R_REQS'] = lambda x: x['hbase']['regionserver'][0][1]['readRequestsCount']
-    METRICS_FUNCS['FLU_SIZE'] = lambda x: x['hbase']['regionserver'][0][1]['flushSize_avg_time']
-    METRICS_FUNCS['REGIONS'] = lambda x: x['hbase']['regionserver'][0][1]['regions']
-    METRICS_FUNCS['STOREFILES'] = lambda x: x['hbase']['regionserver'][0][1]['storefiles']
-    METRICS_FUNCS['CMPCT_Q_SZ'] = lambda x: x['hbase']['regionserver'][0][1]['compactionQueueSize']
-
-    def __init__(self, hostname, port):
-        self.hostname = hostname
-        self.port = port
-        self.snapshots = []
-        self.is_dead = False
-
-    def poll(self):
-        '''Poll metrics from region server.'''
-        metrics = self._get_metrics()
-        if len(self.snapshots) < 2:
-            self.snapshots.append(metrics)
-        else:
-            self.snapshots[0], self.snapshots[1] = self.snapshots[1], metrics
-
-    def _get_metrics(self):
-        '''Get metrics from regionserver rs.
-
-        Return metrics as JSON.'''
-        try:
-            metrics_url = 'http://%s:%d/metrics?format=json' % (self.hostname, self.port)
-            r = requests.get(metrics_url)
-            r.raise_for_status()
-            # can be connected to, is alive or back into live again
-            self.is_dead = False
-            return r.json()
-        except requests.exceptions.ConnectionError:
-            self.is_dead = True
-            return None
-
-    def __getitem__(self, key):
-        if self.is_dead:
-            return 'DEAD'
-        if key not in self.METRICS_KEYS:
-            raise KeyError()
-        if self.METRICS_TYPES[key] == self.GAUGE_METRICS:
-            return str(self._get_gauge(key))
-        elif self.METRICS_TYPES[key] == self.DELTA_METRICS:
-            return str(self._get_delta(key))
-
-    def _get_delta(self, key):
-        if self.is_avaible():
-            func = self.METRICS_FUNCS[key]
-            last_multi = func(self.snapshots[0])
-            curr_multi = func(self.snapshots[1])
-            return curr_multi - last_multi
-
-    def _get_gauge(self, key):
-        if self.is_avaible():
-            func = self.METRICS_FUNCS[key]
-            return func(self.snapshots[1])
-
-    def is_avaible(self):
-        if len(self.snapshots) == 2 and \
-           self.snapshots[0] is not None and \
-           self.snapshots[1] is not None:
-            return True
-        return False
+def get_conf(name, default=None):
+    if not hasattr(conf, name):
+        return default
+    return getattr(conf, name)
 
 
-if __name__ == '__main__':
-    opt = argparse.ArgumentParser()
-    opt.add_argument('--servers', help='regionservers file')
-    opt.add_argument('--port', help='regionserver port', type=int)
-    args = opt.parse_args()
-
-    srv_file = None
-    if args.servers:
-        srv_file = args.servers
-    else:
-        # get from HBASE_HOME/conf
-        hbase_home = os.getenv('HBASE_HOME')
-        if hbase_home is None:
-            sys.stderr.write('No regionservers file found.\n')
-            sys.exit(1)
-        srv_file = os.path.join(hbase_home, 'conf/regionservers')
-        if not os.path.exists(srv_file):
-            sys.stderr.write(
-                'Regionservers file ' + srv_file + ' not exists.\n')
-            sys.exit(1)
-
-    port = 60030
-    if args.port:
-        port = args.port
-
-    regionservers = []
+def get_slaves(srv_file):
+    slaves = []
     with open(srv_file, 'r') as sf:
         for line in sf:
             if line.strip()[0:1] == '#':
                 # comment, skip it
                 continue
             else:
-                regionservers.append(line.strip())
+                slaves.append(line.strip())
+    return slaves
+
+
+def get_hbase_conf(hmaster_info_addr):
+    try:
+        conf_url = '%s/conf?format=json' % (hmaster_info_addr,)
+        r = requests.get(conf_url)
+        if r.status_code == 404:
+            # no /conf ? OMG
+            pass
+        r.raise_for_status()
+
+        hbase_conf = {}
+        for item in r.json()['properties']:
+            hbase_conf[item['key']] = item
+        return hbase_conf
+    except requests.exceptions.ConnectionError:
+        return None
+
+
+if __name__ == '__main__':
+    hbase_home = get_conf('HBASE_HOME', os.getenv('HBASE_HOME'))
+    if hbase_home is None:
+        sys.stderr.write('No HBASE_HOME is set, set it in conf.py or as a eviroment variable.\n')
+        sys.exit(1)
+    hmaster_info_addr = get_conf('HMASTER_INFO_ADDR')
+    if hmaster_info_addr is None:
+        sys.stderr.write('No HMASTER_INFO_ADDR is set, set it in conf.py\n')
+        sys.exit(1)
+    update_interval = get_conf('INTERVAL', 10)
+    if update_interval is None:
+        sys.stderr.write('No INTERVAL is set, set it in conf.py\n')
+        sys.exit(1)
+
+    srv_file = os.path.join(hbase_home, 'conf/regionservers')
+    if not os.path.exists(srv_file):
+        sys.stderr.write(
+            'Regionservers file ' + srv_file + ' not exists.\n')
+        sys.exit(1)
+    regionservers = get_slaves(srv_file)
     if len(regionservers) == 0:
         # no region servers
         sys.stderr.write('No regionservers specified.\n')
         sys.exit(1)
 
-    hms = []
+    hbase_conf = get_hbase_conf(hmaster_info_addr)
+    if hbase_conf is None:
+        sys.stderr.write('Cannot get configuration from HMaster info address\n')
+        sys.exit(1)
+    rs_info_port = int(hbase_conf['hbase.regionserver.info.port']['value'])
+    rs_metrics = []
     for rs in regionservers:
-        hms.append(HBaseMetrics(rs, port))
-    mon = tabmon.TabularMonitor()
-    for key in HBaseMetrics.METRICS_KEYS:
-        mon.add_col(key)
+        rs_metrics.append(RegionServerMetrics(rs, rs_info_port))
 
     # main loop
+    mon = TabularMonitor()
+    for key in RegionServerMetrics.keys:
+        mon.add_col(key)
+
     try:
         while True:
-            for hm in hms:
-                hm.poll()
-            metrics = [m for m in hms if m.is_avaible()]
-            mon.update(metrics)
-            time.sleep(10)
+            for m in rs_metrics:
+                # should make it parallel
+                m.poll()
+            mon.update(rs_metrics)
+            time.sleep(update_interval)
     finally:
         mon.close()
